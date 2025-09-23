@@ -1,4 +1,4 @@
-
+! Programa para demonstrar funções intrínsecas em Fortran
 program prog 
 
 implicit none

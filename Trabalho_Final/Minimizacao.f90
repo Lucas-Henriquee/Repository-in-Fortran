@@ -1,12 +1,49 @@
 ! modulo aleatorio 
-module aleatorio
-    implicit none
-    integer, save :: n_seed = 42
-end module aleatorio
+module rng_mod
+implicit none
+
+integer, parameter :: k4b = selected_int_kind(9)
+
+integer(k4b), save :: ix = -1, iy = -1, l
+real(kind=8), save :: am
+
+integer(k4b), parameter :: ia = 16807
+integer(k4b), parameter :: im = 2147483647
+integer(k4b), parameter :: iq = 127773
+integer(k4b), parameter :: ir = 2836
+
+contains
+
+subroutine ran1sub(idum, x)
+implicit none
+
+integer(k4b), intent(inout) :: idum
+real(kind=8), intent(out) :: x
+
+if (idum <= 0 .or. iy < 0) then
+    am = nearest(1.0d0, -1.0d0) / im
+    iy = ior(ieor(888889999, abs(idum)), 1)
+    ix = ieor(777755555, abs(idum))
+    idum = abs(idum) + 1
+end if
+
+ix = ieor(ix, ishft(ix, 13))
+ix = ieor(ix, ishft(ix, -17))
+ix = ieor(ix, ishft(ix, 5))
+
+l = iy / iq
+iy = ia * (iy - l * iq) - ir * l
+if (iy < 0) iy = iy + im
+
+x = am * ior(iand(im, ieor(ix, iy)), 1)
+
+end subroutine ran1sub
+
+end module rng_mod
 
 ! Problema #1 - Otimizacao das posicoes 
 program minimization
-    use aleatorio
+    use rng_mod
     implicit none
 
     ! Variaveis de controle e iteracao
@@ -14,10 +51,12 @@ program minimization
     integer :: i, k     ! Iteradores   
     integer :: n_h      ! Numero maximo de passos      
     integer :: error    ! Controle de erros
+    integer :: n_seed    ! Semente para numeros aleatorios
 
     ! Variavel de controle do Metodo Hibrido
-    logical :: usar_SA  ! Define se usa o SA ou não
-    integer :: n_out    ! Salva arquivos a cada n_out passos
+    logical :: usar_SA             ! Define se usa o SA ou não
+    integer :: n_out               ! Salva arquivos a cada n_out passos
+    real(8) :: T, T_inicial        ! Temperatura atual do SA
 
     ! Parametros fisicos
     real(8) :: epsilon, sigma
@@ -36,12 +75,15 @@ program minimization
     epsilon = 0.0104D0    ! eV 
     sigma = 3.405D0       ! Argonio 
     h  = 0.01D0           ! Ajuste de estabilidade
-    criterio_F = 0.01D0  ! Criterio de equilibrio (0.01 eV/A)
-    n_h = 100000         ! Limite do loop
+    criterio_F = 0.01D0   ! Criterio de equilibrio (0.01 eV/A)
+    n_h = 300000         ! Limite do loop
+    n_seed = 42           ! Semente para numeros aleatorios
 
     ! Inicializando controle do metodo hibrido
     usar_SA = .true.      ! .true. para ligar o SA
-    n_out = 10          ! Salva a cada n_out passos
+    n_out = 100          ! Salva a cada n_out passos
+    T_inicial = 2.0D0    ! Temperatura inicial do SA
+    T = T_inicial
 
     ! Leitura
     write(*,*) 'Lendo dados de entrada...'
@@ -75,16 +117,16 @@ program minimization
     open(unit=30, file='coordinates_out.xyz', status='replace', action='write', iostat=error)        
     call check_error(error, 'Nao foi possivel criar o arquivo de coordenadas XYZ.')
 
-    ! Simulated Annealing (Pre-Otimizacao)
-    if (usar_SA) then
-        write(*,*) '>>> Executando Simulated Annealing (Pre-Otimizacao)...'
-        call execute_sa(n, x, y, z, epsilon, sigma)
-        write(*,*) '>>> Fim do SA'
-    end if
-
     ! Loop de Minimizacao
     write(*,*) '>>> Iniciando minimizacao com Steepest Descent (Otimizacao)...'    
     do k = 1, n_h
+
+        ! Simulated Annealing (Pre-Otimizacao)
+        if (usar_SA) then
+            ! write(*,*) '>>> Executando Simulated Annealing (Pre-Otimizacao)...'
+            call execute_sa(n, x, y, z, epsilon, sigma, n_seed, T)
+            ! write(*,*) '>>> Fim do SA'
+        end if
         
         ! Chama subrotina para calcular forcas e potencial
         call calculate_forces(n, x, y, z, epsilon, sigma, Fx, Fy, Fz, U_total, Fi_max)
@@ -184,7 +226,7 @@ subroutine calculate_forces(n, x, y, z, epsilon, sigma, Fx, Fy, Fz, U_total, Fi_
             rij = sqrt(dx*dx + dy*dy + dz*dz)    
 
             ! Evitando divisao por zero (sobreposicao de particulas)
-            if (rij > 1.0D-3) then
+            if (rij > 1.0D-3 .and. rij < 10.0D0) then
 
                 termo_12 = (sigma / rij)**12
                 termo_6  = (sigma / rij)**6
@@ -232,20 +274,24 @@ subroutine check_error(err_code, err_msg)
 end subroutine check_error
 
 ! Subrotina para executar Simulated Annealing
-subroutine execute_sa(n, x, y, z, epsilon, sigma)
-    use aleatorio
+subroutine execute_sa(n, x, y, z, epsilon, sigma, n_seed, T)
+    use rng_mod
     implicit none
 
     ! Argumentos de entrada e saida
     integer, intent(in) :: n
+    integer, intent(inout) :: n_seed
     integer :: i    
 
     real(8), intent(inout) :: x(n), y(n), z(n)
     real(8), intent(in) :: epsilon, sigma
+    real(8), intent(inout) :: T
+    
+    real(8) :: dir_x, dir_y, dir_z   ! Direcao do movimento
 
     ! Variaveis de controle do SA
     integer :: k, n_sa, error, p_sel    ! Iteradores e particula selecionada
-    real(8) :: T, T_inicial, alpha      ! Controle de Temperatura
+    real(8) :: alpha      ! Controle de Temperatura
     real(8) :: perturbacao              ! Tamanho do passo aleatorio
     real(8) :: U_old, U_new, delta_E    ! Energias
     real(8) :: rnd, prob                ! Probabilidade Metropolis
@@ -258,10 +304,9 @@ subroutine execute_sa(n, x, y, z, epsilon, sigma)
     real(8), allocatable :: xt(:), yt(:), zt(:)
 
     ! Configuracao do SA
-    n_sa = 10000        ! Numero de passos 
-    T_inicial = 2.0D0   ! Temperatura inicial 
+    n_sa = 2        ! Numero de passos 
     alpha = 0.9995D0    ! Taxa de resfriamento (Lenta)
-    raio_limite = 7.0D0 ! Raio maximo 
+    raio_limite = 80.0D0 ! Raio maximo 
 
     ! Alocacao de memoria temporaria
     allocate(xt(n), yt(n), zt(n), stat=error)
@@ -271,7 +316,6 @@ subroutine execute_sa(n, x, y, z, epsilon, sigma)
 
     ! Calculo da energia inicial
     call calc_energy(n, x, y, z, epsilon, sigma, U_old)
-    T = T_inicial
 
     ! Loop principal do Annealing
     do k = 1, n_sa
@@ -282,7 +326,7 @@ subroutine execute_sa(n, x, y, z, epsilon, sigma)
         zt = z
 
         ! Sorteia uma particula para tentar mover (p_sel)
-        call num_aleatorio(rnd)
+        call ran1sub(n_seed, rnd)
         p_sel = 1 + int(rnd * n) 
         if (p_sel > n) then
             p_sel = n 
@@ -294,29 +338,32 @@ subroutine execute_sa(n, x, y, z, epsilon, sigma)
         z_cm = sum(z) / n
         
         ! Perturbacao decai com o tempo
-        perturbacao = 0.8D0 * exp(-3.0d0 * real(k)/real(n_sa))
+        perturbacao = 0.5D0 * exp(-3.0d0 * real(k)/real(n_sa))
 
         ! Move apenas a particula sorteada (p_sel)
         dist_cm = sqrt((x(p_sel)-x_cm)**2 + (y(p_sel)-y_cm)**2 + (z(p_sel)-z_cm)**2)
+        dir_x = (x_cm - x(p_sel)) / dist_cm
+        dir_y = (y_cm - y(p_sel)) / dist_cm
+        dir_z = (z_cm - z(p_sel)) / dist_cm
         
         ! Verifica Condicao de Contorno 
         if (dist_cm > raio_limite) then
             ! Tras a particula para perto do centro
-            call num_aleatorio(rnd)
-            xt(p_sel) = x_cm + (rnd - 0.5d0) * 15.00d0 
+            call ran1sub(n_seed, rnd)
+            xt(p_sel) = x_cm + dir_x * raio_limite + (rnd - 0.5d0) * perturbacao
 
-            call num_aleatorio(rnd)
-            yt(p_sel) = y_cm + (rnd - 0.5d0) * 15.00d0
-            call num_aleatorio(rnd)
-            zt(p_sel) = z_cm + (rnd - 0.5d0) * 15.00d0
+            call ran1sub(n_seed, rnd)
+            yt(p_sel) = y_cm + dir_y * raio_limite + (rnd - 0.5d0) * perturbacao
+            call ran1sub(n_seed, rnd)
+            zt(p_sel) = z_cm + dir_z * raio_limite + (rnd - 0.5d0) * perturbacao
         else
             ! Movimento aleatorio local
-            call num_aleatorio(rnd)
-            xt(p_sel) = x(p_sel) + (rnd - 0.5d0) * perturbacao
-            call num_aleatorio(rnd)
-            yt(p_sel) = y(p_sel) + (rnd - 0.5d0) * perturbacao
-            call num_aleatorio(rnd)
-            zt(p_sel) = z(p_sel) + (rnd - 0.5d0) * perturbacao
+            call ran1sub(n_seed, rnd)
+            xt(p_sel) = x(p_sel) + (rnd - 0.5d0) * perturbacao * dir_x
+            call ran1sub(n_seed, rnd)
+            yt(p_sel) = y(p_sel) + (rnd - 0.5d0) * perturbacao * dir_y
+            call ran1sub(n_seed, rnd)
+            zt(p_sel) = z(p_sel) + (rnd - 0.5d0) * perturbacao * dir_z
         end if
 
         ! Criterio de Aceitacao de Metropolis
@@ -332,7 +379,7 @@ subroutine execute_sa(n, x, y, z, epsilon, sigma)
             U_old = U_new
         else
             ! Se a energia aumentou aceita com probabilidade P
-            call num_aleatorio(rnd)
+            call ran1sub(n_seed, rnd)
             prob = exp(-delta_E / T)
             
             if (rnd < prob) then
@@ -347,13 +394,13 @@ subroutine execute_sa(n, x, y, z, epsilon, sigma)
         T = T * alpha
         i = 0
         ! Log de progresso
-        if (mod(k, 100) == 0) then
-            write(*,*) 'SA Step:', k, ' E:', U_old
-            write(30, *) n
-            write(30, *) 'Step: ', k, ' Energia: ', U_old    
-            do i = 1, n
-                write(30, 200) 'Ar', x(i), y(i), z(i)
-            end do    
+        if (mod(k, 1) == 0) then
+            ! write(*,*) 'SA Step:', k, ' E:', U_old
+            ! write(30, *) n
+            ! write(30, *) 'Step: ', k, ' Energia: ', U_old    
+            ! do i = 1, n
+            !     write(30, 200) 'Ar', x(i), y(i), z(i)
+            ! end do    
         end if
 
         200 format(A2, 4x, F12.6, 2x, F12.6, 2x, F12.6)
@@ -380,7 +427,7 @@ subroutine calc_energy(n, x, y, z, epsilon, sigma, U_total)
             dz = z(i) - z(j)
             rij = sqrt(dx*dx + dy*dy + dz*dz)
             
-            if (rij > 1.0d-10) then
+            if (rij > 1.0d-10 .and. rij < 10.0d0) then
                 term12 = (sigma / rij)**12
                 term6  = (sigma / rij)**6
                 U_total = U_total + 4.0d0 * epsilon * (term12 - term6)
@@ -390,13 +437,3 @@ subroutine calc_energy(n, x, y, z, epsilon, sigma, U_total)
         end do
     end do
 end subroutine calc_energy
-
-! Gerador de Numeros Aleatorios
-subroutine num_aleatorio(nran)
-    use aleatorio
-    implicit none
-    real(8), intent(out) :: nran
-    
-    n_seed = mod(8127 * n_seed + 28417, 134453)
-    nran = real(n_seed, kind=8) / 134453.0d0
-end subroutine num_aleatorio

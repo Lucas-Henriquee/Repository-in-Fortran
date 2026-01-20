@@ -121,11 +121,9 @@ program minimization
     write(*,*) '>>> Iniciando minimizacao com Steepest Descent (Otimizacao)...'    
     do k = 1, n_h
 
-        ! Simulated Annealing (Pre-Otimizacao)
+        ! Simulated Annealing (Perturbando poucas particulas)
         if (usar_SA) then
-            ! write(*,*) '>>> Executando Simulated Annealing (Pre-Otimizacao)...'
             call execute_sa(n, x, y, z, epsilon, sigma, n_seed, T)
-            ! write(*,*) '>>> Fim do SA'
         end if
         
         ! Chama subrotina para calcular forcas e potencial
@@ -225,7 +223,7 @@ subroutine calculate_forces(n, x, y, z, epsilon, sigma, Fx, Fy, Fz, U_total, Fi_
             ! Calcula r (magnitude da distancia)
             rij = sqrt(dx*dx + dy*dy + dz*dz)    
 
-            ! Evitando divisao por zero (sobreposicao de particulas)
+            ! Evitando divisao por zero (sobreposicao de particulas) e particulas muito distantes
             if (rij > 1.0D-3 .and. rij < 10.0D0) then
 
                 termo_12 = (sigma / rij)**12
@@ -281,7 +279,6 @@ subroutine execute_sa(n, x, y, z, epsilon, sigma, n_seed, T)
     ! Argumentos de entrada e saida
     integer, intent(in) :: n
     integer, intent(inout) :: n_seed
-    integer :: i    
 
     real(8), intent(inout) :: x(n), y(n), z(n)
     real(8), intent(in) :: epsilon, sigma
@@ -392,18 +389,6 @@ subroutine execute_sa(n, x, y, z, epsilon, sigma, n_seed, T)
 
         ! Resfriamento do sistema
         T = T * alpha
-        i = 0
-        ! Log de progresso
-        if (mod(k, 1) == 0) then
-            ! write(*,*) 'SA Step:', k, ' E:', U_old
-            ! write(30, *) n
-            ! write(30, *) 'Step: ', k, ' Energia: ', U_old    
-            ! do i = 1, n
-            !     write(30, 200) 'Ar', x(i), y(i), z(i)
-            ! end do    
-        end if
-
-        200 format(A2, 4x, F12.6, 2x, F12.6, 2x, F12.6)
     
     end do
 
@@ -413,21 +398,37 @@ end subroutine execute_sa
 ! Subrotina para calcular energia
 subroutine calc_energy(n, x, y, z, epsilon, sigma, U_total)
     implicit none
+    ! Argumentos de entrada
     integer, intent(in) :: n
-    real(8), intent(in) :: x(n), y(n), z(n), epsilon, sigma
+    real(8), intent(in) :: x(n), y(n), z(n)
+    real(8), intent(in) :: epsilon, sigma
+    ! Argumento de saida
     real(8), intent(out) :: U_total
-    integer :: i, j
-    real(8) :: dx, dy, dz, rij, term12, term6
 
+    ! Variaveis locais
+    integer :: i, j
+    real(8) :: dx, dy, dz          ! Componentes da distancia (x(i)-x(j))
+    real(8) :: rij                 ! Distancia r
+    real(8) :: term12              ! Termo (sigma/rij)^12
+    real(8) :: term6               ! Termo (sigma/rij)^6
+
+    ! Inicializacao
     U_total = 0.0d0
+
+    ! Loop sobre pares de particulas (i < j)
     do i = 1, n-1
         do j = i+1, n
+            ! Calcula vetor distancia
             dx = x(i) - x(j)
             dy = y(i) - y(j)
             dz = z(i) - z(j)
+
+            ! Calcula r (magnitude da distancia)
             rij = sqrt(dx*dx + dy*dy + dz*dz)
             
-            if (rij > 1.0d-10 .and. rij < 10.0d0) then
+            ! Evitando divisao por zero (sobreposicao de particulas) e particulas muito distantes
+            if (rij > 1.0d-3 .and. rij < 10.0d0) then
+                ! Calcula energia de Lennard-Jones
                 term12 = (sigma / rij)**12
                 term6  = (sigma / rij)**6
                 U_total = U_total + 4.0d0 * epsilon * (term12 - term6)
